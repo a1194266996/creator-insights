@@ -1,0 +1,3 @@
+# The core project uses only the Python standard library.
+# Add optional source-specific dependencies here when you implement a new adapter.
+
