@@ -4,9 +4,10 @@ import argparse
 import time
 from datetime import datetime
 
-from .analysis import analyze
+from .analysis import analyze, latest_rows, render_feishu_text
 from .config import load_settings
 from .db import init_db, upsert_notes
+from .notifier import send_feishu_text
 from .sources import get_source
 
 
@@ -26,11 +27,14 @@ def main() -> None:
     daily_once_parser = subparsers.add_parser("daily", help="Run collect+analyze once.")
     daily_once_parser.add_argument("--limit", type=int, default=100)
     daily_once_parser.add_argument("--days", type=int, default=7)
+    daily_once_parser.add_argument("--no-notify", action="store_true")
+    daily_once_parser.add_argument("--webhook", default=None)
 
     daily_parser = subparsers.add_parser("run-daily", help="Run collect+analyze every N hours.")
     daily_parser.add_argument("--interval-hours", type=float, default=24)
     daily_parser.add_argument("--limit", type=int, default=100)
     daily_parser.add_argument("--days", type=int, default=7)
+    daily_parser.add_argument("--no-notify", action="store_true")
 
     args = parser.parse_args()
     settings = load_settings()
@@ -53,11 +57,13 @@ def main() -> None:
     if args.command == "daily":
         count = _collect(settings, limit=args.limit)
         output_path = analyze(settings.db_path, settings.export_dir, days=args.days)
+        if not args.no_notify:
+            _notify(settings, args.limit, args.days, webhook_url=args.webhook)
         print(f"Collected {count} notes. Generated report: {output_path}")
         return
 
     if args.command == "run-daily":
-        _run_daily(args.interval_hours, args.limit, args.days)
+        _run_daily(args.interval_hours, args.limit, args.days, notify=not args.no_notify)
         return
 
 
@@ -68,7 +74,17 @@ def _collect(settings, limit: int, source_name: str | None = None) -> int:
     return upsert_notes(settings.db_path, notes)
 
 
-def _run_daily(interval_hours: float, limit: int, days: int) -> None:
+def _notify(settings, limit: int, days: int, webhook_url: str | None = None) -> None:
+    rows = latest_rows(settings.db_path, limit=limit, days=days, source=settings.source)
+    text = render_feishu_text(rows, days=days)
+    send_feishu_text(
+        webhook_url or settings.feishu_webhook_url,
+        text,
+        timeout_seconds=settings.request_timeout_seconds,
+    )
+
+
+def _run_daily(interval_hours: float, limit: int, days: int, notify: bool) -> None:
     if interval_hours <= 0:
         raise ValueError("--interval-hours must be greater than 0")
 
@@ -77,5 +93,7 @@ def _run_daily(interval_hours: float, limit: int, days: int) -> None:
         print(f"[{datetime.now().isoformat(timespec='seconds')}] collecting...")
         count = _collect(settings, limit=limit)
         output_path = analyze(settings.db_path, settings.export_dir, days=days)
+        if notify:
+            _notify(settings, limit, days)
         print(f"Collected {count} notes. Generated report: {output_path}")
         time.sleep(interval_hours * 60 * 60)

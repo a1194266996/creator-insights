@@ -17,77 +17,111 @@ def analyze(db_path: Path, export_dir: Path, days: int) -> Path:
         rows = conn.execute(
             """
             SELECT
-                source, note_id, title, author_name, url, keyword, publish_time, collected_at,
-                like_count, collect_count, comment_count, share_count,
+                source, note_id, title, author_name, url, keyword, snippet,
+                publish_time, collected_at, like_count, collect_count,
+                comment_count, share_count, content_type, content_summary,
+                creator_takeaway,
                 like_count + collect_count + comment_count + share_count AS engagement
             FROM notes
             WHERE collected_at >= ?
-            ORDER BY engagement DESC, collected_at DESC
+            ORDER BY collected_at DESC
             """,
             (since,),
         ).fetchall()
 
     output_path = export_dir / f"insights-{datetime.now().strftime('%Y%m%d-%H%M%S')}.md"
-    output_path.write_text(_render_markdown(rows, days), encoding="utf-8-sig")
+    output_path.write_text(render_markdown(rows, days), encoding="utf-8-sig")
     _export_csv(export_dir / "latest-notes.csv", rows)
     return output_path
 
 
-def _render_markdown(rows: list[sqlite3.Row], days: int) -> str:
+def latest_rows(db_path: Path, limit: int, days: int, source: str | None = None) -> list[sqlite3.Row]:
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    source_filter = "AND source = ?" if source else ""
+    params: tuple[object, ...] = (since, source, limit) if source else (since, limit)
+    with connect(db_path) as conn:
+        return conn.execute(
+            f"""
+            SELECT
+                source, note_id, title, author_name, url, keyword, snippet,
+                publish_time, collected_at, like_count, collect_count,
+                comment_count, share_count, content_type, content_summary,
+                creator_takeaway,
+                like_count + collect_count + comment_count + share_count AS engagement
+            FROM notes
+            WHERE collected_at >= ?
+            {source_filter}
+            ORDER BY collected_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+
+def render_markdown(rows: list[sqlite3.Row], days: int) -> str:
     keyword_counter = Counter(row["keyword"] or "未标记" for row in rows)
-    author_counter = Counter(row["author_name"] or "未知作者" for row in rows)
+    type_counter = Counter(row["content_type"] or "未分析" for row in rows)
 
     lines = [
-        f"# 萌宠猫内容观察报告（近 {days} 天）",
+        f"# 全网萌宠内容搜索日报（近 {days} 天）",
         "",
         f"- 样本数：{len(rows)}",
-        f"- 关键词覆盖：{len(keyword_counter)}",
+        f"- 关键词：{', '.join(keyword_counter.keys()) if keyword_counter else '无'}",
+        f"- 内容类型：{', '.join(f'{k} {v}' for k, v in type_counter.most_common()) if type_counter else '无'}",
         "",
-        "## 高互动笔记 Top 20",
+        "## 搜索结果与简短分析",
         "",
-        "| 排名 | 标题 | 作者 | 关键词 | 互动量 | 赞 | 藏 | 评 | 转 |",
-        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| 序号 | 关键词 | 类型 | 标题 | 简短分析 | 创作启发 |",
+        "| ---: | --- | --- | --- | --- | --- |",
     ]
 
-    for rank, row in enumerate(rows[:20], 1):
+    for rank, row in enumerate(rows[:30], 1):
         title = _cell(row["title"])
         if row["url"]:
             title = f"[{title}]({row['url']})"
         lines.append(
-            "| {rank} | {title} | {author} | {keyword} | {engagement} | {likes} | "
-            "{collects} | {comments} | {shares} |".format(
+            "| {rank} | {keyword} | {content_type} | {title} | {summary} | {takeaway} |".format(
                 rank=rank,
-                title=title,
-                author=_cell(row["author_name"]),
                 keyword=_cell(row["keyword"]),
-                engagement=row["engagement"],
-                likes=row["like_count"],
-                collects=row["collect_count"],
-                comments=row["comment_count"],
-                shares=row["share_count"],
+                content_type=_cell(row["content_type"]),
+                title=title,
+                summary=_cell(row["content_summary"]),
+                takeaway=_cell(row["creator_takeaway"]),
             )
         )
 
-    lines.extend(["", "## 关键词热度", ""])
-    for keyword, count in keyword_counter.most_common(20):
-        lines.append(f"- {keyword}: {count}")
+    lines.extend(["", "## 今日可参考方向", ""])
+    for content_type, count in type_counter.most_common(5):
+        lines.append(f"- {content_type}: 搜到 {count} 条，可优先观察标题结构、封面承诺和评论区问题。")
 
-    lines.extend(["", "## 高频作者", ""])
-    for author, count in author_counter.most_common(20):
-        lines.append(f"- {author}: {count}")
-
-    lines.extend(
-        [
-            "",
-            "## 选题观察问题",
-            "",
-            "- 哪些标题把猫的品种、场景、情绪或养护问题说得最具体？",
-            "- 收藏高但评论低的内容，是否更适合做清单、测评和教程？",
-            "- 评论高的内容里，粉丝是在提问、共鸣、争议，还是晒自家猫？",
-            "- 高互动作者的更新频率、封面结构、标题句式是否有稳定模板？",
-        ]
-    )
     return "\n".join(lines) + "\n"
+
+
+def render_feishu_text(rows: list[sqlite3.Row], days: int) -> str:
+    if not rows:
+        return (
+            f"全网萌宠内容搜索日报（近 {days} 天）\n"
+            "本次没有收录到可分析的公开搜索结果。\n\n"
+            "说明：程序只读取公开搜索索引可见的数据；不会绕过登录、验证码、签名或风控。"
+        )
+
+    lines = [
+        f"全网萌宠内容搜索日报（近 {days} 天）",
+        f"本次收录 {len(rows)} 条公开搜索结果",
+        "",
+    ]
+    for index, row in enumerate(rows[:20], 1):
+        lines.extend(
+            [
+                f"{index}. [{row['keyword']}] {row['title']}",
+                f"类型：{row['content_type'] or '未分析'}",
+                f"分析：{row['content_summary'] or '暂无'}",
+                f"启发：{row['creator_takeaway'] or '暂无'}",
+                f"链接：{row['url']}",
+                "",
+            ]
+        )
+    return "\n".join(lines).strip()
 
 
 def _export_csv(path: Path, rows: list[sqlite3.Row]) -> None:
@@ -101,12 +135,16 @@ def _export_csv(path: Path, rows: list[sqlite3.Row]) -> None:
                 "author_name",
                 "url",
                 "keyword",
+                "snippet",
                 "publish_time",
                 "collected_at",
                 "like_count",
                 "collect_count",
                 "comment_count",
                 "share_count",
+                "content_type",
+                "content_summary",
+                "creator_takeaway",
                 "engagement",
             ]
         )

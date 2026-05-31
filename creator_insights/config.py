@@ -14,9 +14,7 @@ def _load_dotenv(path: Path) -> None:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 def _csv(value: str) -> list[str]:
@@ -31,6 +29,11 @@ class Settings:
     source: str
     keywords: list[str]
     xhs_export_path: Path | None
+    search_site: str
+    search_engine: str
+    search_user_agent: str
+    request_timeout_seconds: int
+    feishu_webhook_url: str
 
 
 def load_settings(project_root: Path | None = None) -> Settings:
@@ -46,13 +49,25 @@ def load_settings(project_root: Path | None = None) -> Settings:
     if not export_dir.is_absolute():
         export_dir = root / export_dir
 
+    xhs_export_path = None
+    if export_path:
+        xhs_export_path = Path(export_path)
+        if not xhs_export_path.is_absolute():
+            xhs_export_path = root / xhs_export_path
+
     return Settings(
         project_root=root,
         db_path=db_path,
         export_dir=export_dir,
-        source=os.environ.get("CREATOR_INSIGHTS_SOURCE", "sample").strip(),
-        keywords=_csv(os.environ.get("XHS_KEYWORDS", "猫,萌宠,布偶猫,英短,橘猫")),
-        xhs_export_path=(root / export_path if export_path and not Path(export_path).is_absolute() else Path(export_path))
-        if export_path
-        else None,
+        source=os.environ.get("CREATOR_INSIGHTS_SOURCE", "web_search").strip(),
+        keywords=_csv(os.environ.get("XHS_KEYWORDS", "猫,萌宠")),
+        xhs_export_path=xhs_export_path,
+        search_site=os.environ.get("SEARCH_SITE", "").strip(),
+        search_engine=os.environ.get("SEARCH_ENGINE", "public_search").strip(),
+        search_user_agent=os.environ.get(
+            "SEARCH_USER_AGENT",
+            "Mozilla/5.0 (compatible; CreatorInsightsBot/0.1; public web search)",
+        ).strip(),
+        request_timeout_seconds=int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "20")),
+        feishu_webhook_url=os.environ.get("FEISHU_WEBHOOK_URL", "").strip(),
     )

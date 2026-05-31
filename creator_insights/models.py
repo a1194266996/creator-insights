@@ -17,12 +17,16 @@ class Note:
     author_id: str = ""
     url: str = ""
     keyword: str = ""
+    snippet: str = ""
     publish_time: str = ""
     collected_at: str = field(default_factory=utc_now_iso)
     like_count: int = 0
     collect_count: int = 0
     comment_count: int = 0
     share_count: int = 0
+    content_type: str = ""
+    content_summary: str = ""
+    creator_takeaway: str = ""
     raw_json: str = "{}"
 
     @property
